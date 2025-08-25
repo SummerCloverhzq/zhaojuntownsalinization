@@ -59,7 +59,7 @@ vif_data['VIF'] = [variance_inflation_factor(X_vif_const.values, i)
 vif_data = vif_data[vif_data['Feature'] != 'const']
 
 vif_data = vif_data.sort_values(by='VIF', ascending=False)
-print("方差膨胀因子（VIF）分析：")
+print("VIF：")
 print(vif_data)
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=60)
