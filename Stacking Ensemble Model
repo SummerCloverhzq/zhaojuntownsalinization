@@ -1,0 +1,126 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from xgboost import XGBRegressor
+from sklearn.ensemble import RandomForestRegressor, StackingRegressor
+from sklearn.linear_model import RidgeCV
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import seaborn as sns
+import matplotlib.pyplot as plt
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+from statsmodels.tools.tools import add_constant
+import pandas as pd
+from sklearn.ensemble import GradientBoostingRegressor
+
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
+
+file_path = 'my own file.csv'
+data = pd.read_csv(file_path, encoding='gbk')
+
+data.dropna(inplace=True)
+data.drop_duplicates(inplace=True)
+data['Classification of land use'] = data['Classification of land use'].astype(int)
+data['lon'] = data['Longitude']
+data['lat'] = data['Latitude']
+data['lon2'] = data['lon'] ** 2
+data['lat2'] = data['lat'] ** 2
+data['lon_lat'] = data['lon'] * data['lat']
+data['sin_lat'] = np.sin(np.radians(data['lat']))
+data['cos_lat'] = np.cos(np.radians(data['lat']))
+
+features = features = ['NDVI','LST', 'EVI2', 'BSI', 'DEM', 'PET', 'ET', 'EBSI', 'NDSI',
+            'Classification of land use', 'lon', 'lat']
+
+X = data[features]
+y = data['5_10']
+
+corr_features = features + ['5_10']
+corr_matrix = data[corr_features].corr()
+
+plt.figure(figsize=(14, 12))
+sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt=".2f", square=True, linewidths=0.5)
+plt.title('特征相关性热力图', fontsize=16)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+X_vif = data[features].copy()
+
+X_vif_const = add_constant(X_vif)
+
+vif_data = pd.DataFrame()
+vif_data['Feature'] = X_vif_const.columns
+vif_data['VIF'] = [variance_inflation_factor(X_vif_const.values, i) 
+                   for i in range(X_vif_const.shape[1])]
+
+vif_data = vif_data[vif_data['Feature'] != 'const']
+
+vif_data = vif_data.sort_values(by='VIF', ascending=False)
+print("方差膨胀因子（VIF）分析：")
+print(vif_data)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=60)
+scaler = MinMaxScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+xgb = XGBRegressor(n_estimators=300, max_depth=6, learning_rate=0.3,
+                   min_child_weight=1, subsample=0.9, random_state=65)
+
+rf = RandomForestRegressor(n_estimators=300, max_depth=9, random_state=65)
+meta_learner = RidgeCV() 
+stacked_model = StackingRegressor(
+    estimators=[('xgb', xgb), ('rf', rf)],
+    final_estimator=meta_learner,
+    passthrough=False, 
+    n_jobs=-1
+)
+
+stacked_model.fit(X_train_scaled, y_train)
+
+xgb.fit(X_train_scaled, y_train)
+rf.fit(X_train_scaled, y_train)
+
+print("单独模型性能对比：")
+print("XGB R² on Test:", r2_score(y_test, xgb.predict(X_test_scaled)))
+print("RF R² on Test:", r2_score(y_test, rf.predict(X_test_scaled)))
+
+y_train_pred = stacked_model.predict(X_train_scaled)
+y_test_pred = stacked_model.predict(X_test_scaled)
+
+def evaluate(y_true, y_pred, label=''):
+    print(f"{label} MSE: {mean_squared_error(y_true, y_pred):.4f}")
+    print(f"{label} RMSE: {np.sqrt(mean_squared_error(y_true, y_pred)):.4f}")
+    print(f"{label} MAE: {mean_absolute_error(y_true, y_pred):.4f}")
+    print(f"{label} R²: {r2_score(y_true, y_pred):.4f}")
+    print('-'*40)
+
+print("模型评估结果:")
+evaluate(y_train, y_train_pred, "Train")
+evaluate(y_test, y_test_pred, "Test")
+
+plt.figure(figsize=(10, 6))
+plt.plot(y_test.values, label='True')
+plt.plot(y_test_pred, label='Pred')
+plt.xlabel('样本编号')
+plt.ylabel('5_10值')
+plt.title('Stacking模型预测对比图')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(10, 6))
+plt.scatter(y_test, y_test_pred, alpha=0.7, label='Test')
+plt.scatter(y_train, y_train_pred, alpha=0.4, label='Train')
+plt.plot([y.min(), y.max()], [y.min(), y.max()], 'r--')
+plt.xlabel('真实值')
+plt.ylabel('预测值')
+plt.title('Stacking模型：预测 vs 实际')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
