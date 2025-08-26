@@ -1,23 +1,16 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-from xgboost import XGBRegressor
 from sklearn.ensemble import RandomForestRegressor, StackingRegressor
-from sklearn.linear_model import RidgeCV
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import seaborn as sns
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import KFold
+from sklearn.linear_model import RidgeCV
+from xgboost import XGBRegressor
 import matplotlib.pyplot as plt
-from statsmodels.stats.outliers_influence import variance_inflation_factor
-from statsmodels.tools.tools import add_constant
-import pandas as pd
-from sklearn.ensemble import GradientBoostingRegressor
+import seaborn as sns
+import shap
 
-plt.rcParams['font.sans-serif'] = ['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
-
-file_path = 'my own file.csv'
+file_path = 'your file.csv'
 data = pd.read_csv(file_path, encoding='gbk')
 
 data.dropna(inplace=True)
@@ -25,102 +18,134 @@ data.drop_duplicates(inplace=True)
 data['Classification of land use'] = data['Classification of land use'].astype(int)
 data['lon'] = data['Longitude']
 data['lat'] = data['Latitude']
-data['lon2'] = data['lon'] ** 2
-data['lat2'] = data['lat'] ** 2
-data['lon_lat'] = data['lon'] * data['lat']
-data['sin_lat'] = np.sin(np.radians(data['lat']))
-data['cos_lat'] = np.cos(np.radians(data['lat']))
 
-features = features = ['NDVI','LST', 'EVI2', 'BSI', 'DEM', 'PET', 'ET', 'EBSI', 'NDSI',
-            'Classification of land use', 'lon', 'lat']
+y_raw = data['']
+min_val = y_raw.min()
+offset = abs(min_val) + 1 if min_val <= 0 else 0
+y_adj = y_raw + offset
+y_log = np.log10(y_adj)
 
-X = data[features]
-y = data['5_10']
+feature_cols = [
+    'LST','DEM','PET','ET','Classification of land use','NDSI','EBSI','EVI2','BSI','NDVI','lon','lat']
+X_df = data[feature_cols]
+feature_names = X_df.columns.tolist()
+X = X_df.values
 
-corr_features = features + ['5_10']
-corr_matrix = data[corr_features].corr()
+kf = KFold(n_splits=10, shuffle=True, random_state=65)
+mse_list, r2_list = [], []
+all_errors, y_all, pred_all = [], [], []
+lon_all, lat_all = [], []
 
-plt.figure(figsize=(14, 12))
-sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt=".2f", square=True, linewidths=0.5)
-plt.title('特征相关性热力图', fontsize=16)
-plt.xticks(rotation=45)
+for train_idx, test_idx in kf.split(X):
+    X_tr, X_te = X[train_idx], X[test_idx]
+    lon_all.extend(data['lon'].iloc[test_idx].tolist())
+    lat_all.extend(data['lat'].iloc[test_idx].tolist())
+    y_tr_log = y_log.iloc[train_idx]
+    y_te_log = y_log.iloc[test_idx]
+
+    scaler = MinMaxScaler().fit(X_tr)
+    X_tr_s = scaler.transform(X_tr)
+    X_te_s = scaler.transform(X_te)
+
+    xgb = XGBRegressor(n_estimators=200, max_depth=6, learning_rate=0.3,
+                       min_child_weight=1, subsample=0.9, random_state=65)
+    rf = RandomForestRegressor(n_estimators=300, max_depth=9, random_state=65)
+    meta_learner = RidgeCV() 
+
+    stacked_model = StackingRegressor(
+        estimators=[('xgb', xgb), ('rf', rf)],
+        final_estimator=meta_learner,
+        passthrough=False, 
+        n_jobs=-1
+    )
+
+    stacked_model.fit(X_tr_s, y_tr_log)
+
+    pred_log = stacked_model.predict(X_te_s)
+
+    pred_adj = 10 ** pred_log
+    pred_orig = pred_adj - offset
+    y_te_orig = (10 ** y_te_log) - offset
+
+    mse_list.append(mean_squared_error(y_te_orig, pred_orig))
+    r2_list.append(r2_score(y_te_orig, pred_orig))
+    errors = y_te_orig - pred_orig
+    all_errors.extend(errors.tolist())
+    y_all.extend(y_te_orig.tolist())
+    pred_all.extend(pred_orig.tolist())
+
+print(f"10-Fold CV → MSE: {np.mean(mse_list):.4f}, R²: {np.mean(r2_list):.4f}")
+
+y_all = np.array(y_all)
+pred_all = np.array(pred_all)
+
+plt.figure(figsize=(10, 6))
+plt.plot(y_all, label='True')
+plt.plot(pred_all, label='Pred')
+plt.xlabel('Sample')
+plt.ylabel('value')
+plt.title('Stacked Model Training and validation results')
+plt.legend()
+plt.grid(False)
 plt.tight_layout()
 plt.show()
 
-X_vif = data[features].copy()
+mse = np.mean(mse_list)
+r2 = np.mean(r2_list)
+rmse = np.sqrt(mse)
 
-X_vif_const = add_constant(X_vif)
+plt.figure(figsize=(8,6))
+sns.histplot(all_errors, kde=True)
+plt.title('Aggregated Prediction Error Distribution')
+plt.xlabel('Error (Actual - Predicted)'); plt.ylabel('Frequency')
+plt.grid(False); plt.tight_layout()
+plt.show()
 
-vif_data = pd.DataFrame()
-vif_data['Feature'] = X_vif_const.columns
-vif_data['VIF'] = [variance_inflation_factor(X_vif_const.values, i) 
-                   for i in range(X_vif_const.shape[1])]
+plt.figure(figsize=(8,6))
+plt.boxplot(mse_list, notch=True)
+plt.title('10-Fold CV MSE Distribution'); plt.ylabel('MSE')
+plt.grid(False); plt.tight_layout()
+plt.show()
 
-vif_data = vif_data[vif_data['Feature'] != 'const']
+scaler_full = MinMaxScaler().fit(X)
+X_s_full = scaler_full.transform(X)
 
-vif_data = vif_data.sort_values(by='VIF', ascending=False)
-print("VIF：")
-print(vif_data)
+rf_full = RandomForestRegressor(n_estimators=100, random_state=60)
+rf_full.fit(X_s_full, y_log)
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=60)
-scaler = MinMaxScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+explainer = shap.TreeExplainer(rf_full)
+shap_values = explainer.shap_values(X_s_full)
 
-xgb = XGBRegressor(n_estimators=300, max_depth=6, learning_rate=0.3,
-                   min_child_weight=1, subsample=0.9, random_state=65)
-
-rf = RandomForestRegressor(n_estimators=300, max_depth=9, random_state=65)
-meta_learner = RidgeCV() 
-stacked_model = StackingRegressor(
-    estimators=[('xgb', xgb), ('rf', rf)],
-    final_estimator=meta_learner,
-    passthrough=False, 
-    n_jobs=-1
+shap.summary_plot(
+    shap_values,
+    X_s_full,
+    feature_names=feature_names,
+    show=False
 )
 
-stacked_model.fit(X_train_scaled, y_train)
-
-xgb.fit(X_train_scaled, y_train)
-rf.fit(X_train_scaled, y_train)
-
-print("单独模型性能对比：")
-print("XGB R² on Test:", r2_score(y_test, xgb.predict(X_test_scaled)))
-print("RF R² on Test:", r2_score(y_test, rf.predict(X_test_scaled)))
-
-y_train_pred = stacked_model.predict(X_train_scaled)
-y_test_pred = stacked_model.predict(X_test_scaled)
-
-def evaluate(y_true, y_pred, label=''):
-    print(f"{label} MSE: {mean_squared_error(y_true, y_pred):.4f}")
-    print(f"{label} RMSE: {np.sqrt(mean_squared_error(y_true, y_pred)):.4f}")
-    print(f"{label} MAE: {mean_absolute_error(y_true, y_pred):.4f}")
-    print(f"{label} R²: {r2_score(y_true, y_pred):.4f}")
-    print('-'*40)
-
-print("模型评估结果:")
-evaluate(y_train, y_train_pred, "Train")
-evaluate(y_test, y_test_pred, "Test")
-
-plt.figure(figsize=(10, 6))
-plt.plot(y_test.values, label='True')
-plt.plot(y_test_pred, label='Pred')
-plt.xlabel('样本编号')
-plt.ylabel('5_10值')
-plt.title('Stacking模型预测对比图')
-plt.legend()
-plt.grid(True)
+plt.gca().set_xlabel("SHAP value")
 plt.tight_layout()
 plt.show()
 
-plt.figure(figsize=(10, 6))
-plt.scatter(y_test, y_test_pred, alpha=0.7, label='Test')
-plt.scatter(y_train, y_train_pred, alpha=0.4, label='Train')
-plt.plot([y.min(), y.max()], [y.min(), y.max()], 'r--')
-plt.xlabel('真实值')
-plt.ylabel('预测值')
-plt.title('Stacking模型：预测 vs 实际')
-plt.legend()
-plt.grid(True)
+plt.figure(figsize=(8,8))
+plt.scatter(y_all, y_all, color='navy', label='Actual Values', s=100, edgecolors='none')
+plt.scatter(y_all, pred_all, color='orange', label='Predicted Values', marker='D', s=150, edgecolors='none')
+lims = [min(y_all.min(), pred_all.min()), max(y_all.max(), pred_all.max())]
+plt.plot(lims, lims, 'k--', lw=2)
+textstr = '\n'.join((
+    r'$R^2 = %.3f$'   % (r2,   ),
+    r'$MSE = %.3f$'   % (mse,  ),
+    r'$RMSE = %.3f$' % (rmse,)))
+plt.text(
+    0.05, 0.95, textstr,
+    transform=plt.gca().transAxes,
+    fontsize=22, verticalalignment='top',
+    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='none' ))
+plt.title('Actual vs Predicted',fontsize=16)
+plt.xlabel('Actual Value (mS/cm)',fontsize=16)
+plt.ylabel('Predicted Value (mS/cm)',fontsize=16)
+plt.tick_params(axis='both', which='major', labelsize=16)
+plt.legend(fontsize=22)
+plt.grid(False)
 plt.tight_layout()
 plt.show()
