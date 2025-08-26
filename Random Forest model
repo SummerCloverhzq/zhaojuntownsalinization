@@ -7,7 +7,6 @@ from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 import seaborn as sns
 import shap
-from lightgbm import LGBMRegressor
 
 file_path = 'your file.csv'
 data = pd.read_csv(file_path, encoding='gbk')
@@ -47,10 +46,15 @@ for train_idx, test_idx in kf.split(X):
     X_tr_s = scaler.transform(X_tr)
     X_te_s = scaler.transform(X_te)
 
-    rf = RandomForestRegressor(n_estimators=100, min_samples_split=2, min_samples_leaf=1, random_state=60)
+    rf = RandomForestRegressor(
+        n_estimators=100, 
+        min_samples_split=2, 
+        min_samples_leaf=1, 
+        random_state=65
+    )
+    rf.fit(X_tr_s, y_tr_log)
 
-    pred_log = lgb.predict(X_te_s)
-
+    pred_log = rf.predict(X_te_s)
     pred_adj = 10 ** pred_log
     pred_orig = pred_adj - offset
     y_te_orig = (10 ** y_te_log) - offset
@@ -68,13 +72,13 @@ y_all = np.array(y_all)
 pred_all = np.array(pred_all)
 
 plt.figure(figsize=(10, 6))
-plt.plot(y_all, label='True')
-plt.plot(pred_all, label='Pred')
+plt.plot(y_all, label='True', alpha=0.7)
+plt.plot(pred_all, label='Predicted', alpha=0.7)
 plt.xlabel('Sample')
-plt.ylabel('value')
-plt.title('Random Forest Training and validation results')
+plt.ylabel('Value')
+plt.title('Random Forest Training and Validation Results')
 plt.legend()
-plt.grid(False)
+plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
@@ -83,16 +87,20 @@ r2 = np.mean(r2_list)
 rmse = np.sqrt(mse)
 
 plt.figure(figsize=(8,6))
-sns.histplot(all_errors, kde=True)
+sns.histplot(all_errors, kde=True, bins=30)
 plt.title('Aggregated Prediction Error Distribution')
-plt.xlabel('Error (Actual - Predicted)'); plt.ylabel('Frequency')
-plt.grid(False); plt.tight_layout()
+plt.xlabel('Error (Actual - Predicted)')
+plt.ylabel('Frequency')
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
 plt.show()
 
 plt.figure(figsize=(8,6))
 plt.boxplot(mse_list, notch=True)
-plt.title('10-Fold CV MSE Distribution'); plt.ylabel('MSE')
-plt.grid(False); plt.tight_layout()
+plt.title('10-Fold CV MSE Distribution')
+plt.ylabel('MSE')
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
 plt.show()
 
 scaler_full = MinMaxScaler().fit(X)
@@ -104,38 +112,39 @@ rf_full.fit(X_s_full, y_log)
 explainer = shap.TreeExplainer(rf_full)
 shap_values = explainer.shap_values(X_s_full)
 
+plt.figure(figsize=(10, 6))
 shap.summary_plot(
     shap_values,
     X_s_full,
     feature_names=feature_names,
     show=False
 )
-
 plt.gca().set_xlabel("SHAP value")
 plt.tight_layout()
 plt.show()
 
 plt.figure(figsize=(8,8))
-plt.scatter(y_all, y_all, color='navy', label='Actual Values', s=100, edgecolors='none')  # Deep blue for actual values, solid, no edge
-plt.scatter(y_all, pred_all, color='orange', label='Predicted Values', marker='D', s=150, edgecolors='none')  # Orange for predicted values, diamond shape, solid
+plt.scatter(y_all, y_all, color='navy', label='Perfect Prediction', s=50, alpha=0.6)
+plt.scatter(y_all, pred_all, color='orange', label='Predicted Values', marker='o', s=50, alpha=0.7)
+
 lims = [min(y_all.min(), pred_all.min()), max(y_all.max(), pred_all.max())]
-plt.plot(lims, lims, 'k--', lw=2)
+plt.plot(lims, lims, 'k--', lw=2, label='1:1 Line')
 
 textstr = '\n'.join((
-    r'$R^2 = %.3f$'   % (r2,   ),
-    r'$MSE = %.3f$'   % (mse,  ),
+    r'$R^2 = %.3f$' % (r2,),
+    r'$MSE = %.3f$' % (mse,),
     r'$RMSE = %.3f$' % (rmse,)))
 plt.text(
     0.05, 0.95, textstr,
     transform=plt.gca().transAxes,
-    fontsize=22, verticalalignment='top',
-    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='none' ))
-plt.title('Actual vs Predicted',fontsize=16)
-plt.xlabel('Actual Value (mS/cm)',fontsize=16)
-plt.ylabel('Predicted Value (mS/cm)',fontsize=16)
-plt.tick_params(axis='both', which='major', labelsize=16)
-plt.legend(fontsize=22)  # Add legend to show which color represents what
-plt.grid(False)
+    fontsize=14, verticalalignment='top',
+    bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.8))
+
+plt.title('Actual vs Predicted Values', fontsize=16)
+plt.xlabel('Actual Value (mS/cm)', fontsize=14)
+plt.ylabel('Predicted Value (mS/cm)', fontsize=14)
+plt.tick_params(axis='both', which='major', labelsize=12)
+plt.legend(fontsize=12)
+plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
-
