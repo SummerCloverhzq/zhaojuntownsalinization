@@ -18,7 +18,7 @@ data['Classification of land use'] = data['Classification of land use'].astype(i
 data['lon'] = data['Longitude']
 data['lat'] = data['Latitude']
 
-y_raw = data['40_50']
+y_raw = data['']
 min_val = y_raw.min()
 offset = abs(min_val) + 1 if min_val <= 0 else 0
 y_adj = y_raw + offset
@@ -79,7 +79,7 @@ plt.plot(y_all, label='True')
 plt.plot(pred_all, label='Pred')
 plt.xlabel('Sample')
 plt.ylabel('value')
-plt.title('LightGBM Training and validation results (40-50cm)')
+plt.title('LightGBM Training and validation results')
 plt.legend()
 plt.grid(False)
 plt.tight_layout()
@@ -105,7 +105,7 @@ plt.show()
 scaler_full = MinMaxScaler().fit(X)
 X_s_full = scaler_full.transform(X)
 
-rf_full = RandomForestRegressor(n_estimators=100, random_state=60)
+rf_full = RandomForestRegressor(n_estimators=100, random_state=65)
 rf_full.fit(X_s_full, y_log)
 
 explainer = shap.TreeExplainer(rf_full)
@@ -118,7 +118,7 @@ shap.summary_plot(
     show=False
 )
 
-plt.gca().set_xlabel("SHAP value (40-50cm)")
+plt.gca().set_xlabel("SHAP value")
 plt.tight_layout()
 plt.show()
 
@@ -137,7 +137,7 @@ plt.text(
     transform=plt.gca().transAxes,
     fontsize=22, verticalalignment='top',
     bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='none' ))
-plt.title('Actual vs Predicted (40-50cm)',fontsize=16)
+plt.title('Actual vs Predicted)',fontsize=16)
 plt.xlabel('Actual Value (mS/cm)',fontsize=16)
 plt.ylabel('Predicted Value (mS/cm)',fontsize=16)
 plt.tick_params(axis='both', which='major', labelsize=16)
