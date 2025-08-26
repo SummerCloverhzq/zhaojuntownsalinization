@@ -1,1 +1,147 @@
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import KFold
+import matplotlib.pyplot as plt
+import seaborn as sns
+import shap
+from xgboost import XGBRegressor
 
+file_path = 'your file.csv'
+data = pd.read_csv(file_path, encoding='gbk')
+
+data.dropna(inplace=True)
+data.drop_duplicates(inplace=True)
+data['Classification of land use'] = data['Classification of land use'].astype(int)
+data['lon'] = data['Longitude']
+data['lat'] = data['Latitude']
+
+y_raw = data['']
+min_val = y_raw.min()
+offset = abs(min_val) + 1 if min_val <= 0 else 0
+y_adj = y_raw + offset
+y_log = np.log10(y_adj)
+
+feature_cols = [
+    'LST','DEM','PET','ET','Classification of land use',
+    'NDSI','EBSI','EVI2','BSI','NDVI','lon','lat']
+X_df = data[feature_cols]
+feature_names = X_df.columns.tolist()
+X = X_df.values
+
+kf = KFold(n_splits=10, shuffle=True, random_state=65)
+mse_list, r2_list = [], []
+all_errors, y_all, pred_all = [], [], []
+lon_all, lat_all = [], []
+
+for train_idx, test_idx in kf.split(X):
+    X_tr, X_te = X[train_idx], X[test_idx]
+    lon_all.extend(data['lon'].iloc[test_idx].tolist())
+    lat_all.extend(data['lat'].iloc[test_idx].tolist())
+    y_tr_log = y_log.iloc[train_idx]
+    y_te_log = y_log.iloc[test_idx]
+
+    scaler = MinMaxScaler().fit(X_tr)
+    X_tr_s = scaler.transform(X_tr)
+    X_te_s = scaler.transform(X_te)
+
+    xgb = XGBRegressor(n_estimators=200, max_depth=6, learning_rate=0.2, random_state=65)
+    xgb.fit(X_tr_s, y_tr_log)
+
+    pred_log = xgb.predict(X_te_s)
+
+    pred_adj = 10 ** pred_log
+    pred_orig = pred_adj - offset
+    y_te_orig = (10 ** y_te_log) - offset
+
+    mse_list.append(mean_squared_error(y_te_orig, pred_orig))
+    r2_list.append(r2_score(y_te_orig, pred_orig))
+    errors = y_te_orig - pred_orig
+    all_errors.extend(errors.tolist())
+    y_all.extend(y_te_orig.tolist())
+    pred_all.extend(pred_orig.tolist())
+
+print(f"10-Fold CV → MSE: {np.mean(mse_list):.4f}, R²: {np.mean(r2_list):.4f}")
+
+y_all = np.array(y_all)
+pred_all = np.array(pred_all)
+
+plt.figure(figsize=(10, 6))
+plt.plot(y_all, label='True', alpha=0.7)
+plt.plot(pred_all, label='Pred', alpha=0.7)
+plt.xlabel('Sample')
+plt.ylabel('Value')
+plt.title('XGBoost Training and validation results')
+plt.legend()
+plt.grid(False)
+plt.tight_layout()
+plt.show()
+
+mse = np.mean(mse_list)
+r2 = np.mean(r2_list)
+rmse = np.sqrt(mse)
+
+plt.figure(figsize=(8,6))
+sns.histplot(all_errors, kde=True)
+plt.title('Aggregated Prediction Error Distribution')
+plt.xlabel('Error (Actual - Predicted)')
+plt.ylabel('Frequency')
+plt.grid(False)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(8,6))
+plt.boxplot(mse_list, notch=True)
+plt.title('10-Fold CV MSE Distribution')
+plt.ylabel('MSE')
+plt.grid(False)
+plt.tight_layout()
+plt.show()
+
+scaler_full = MinMaxScaler().fit(X)
+X_s_full = scaler_full.transform(X)
+
+rf_full = RandomForestRegressor(n_estimators=100, random_state=60)
+rf_full.fit(X_s_full, y_log)
+
+explainer = shap.TreeExplainer(rf_full)
+shap_values = explainer.shap_values(X_s_full)
+
+shap.summary_plot(
+    shap_values,
+    X_s_full,
+    feature_names=feature_names,
+    show=False
+)
+
+plt.gca().set_xlabel("SHAP value")
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(8,8))
+plt.scatter(y_all, y_all, color='navy', label='Actual Values', s=100, edgecolors='none')  # Deep blue for actual values, solid, no edge
+plt.scatter(y_all, pred_all, color='orange', label='Predicted Values', marker='D', s=150, edgecolors='none')  # Orange for predicted values, diamond shape, solid
+lims = [min(y_all.min(), pred_all.min()), max(y_all.max(), pred_all.max())]
+plt.plot(lims, lims, 'k--', lw=2)
+
+textstr = '\n'.join((
+    r'$R^2 = %.3f$' % (r2,),
+    r'$MSE = %.3f$' % (mse,),
+    r'$RMSE = %.3f$' % (rmse,)))
+
+plt.text(
+    0.05, 0.95, textstr,
+    transform=plt.gca().transAxes,
+    fontsize=22, verticalalignment='top',
+    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='none'))
+
+plt.title('Actual vs Predicted', fontsize=16)
+plt.xlabel('Actual Value (mS/cm)', fontsize=16)
+plt.ylabel('Predicted Value (mS/cm)', fontsize=16)
+plt.tick_params(axis='both', which='major', labelsize=16)
+plt.legend(fontsize=22)  # Add legend to show which color represents what
+plt.grid(False)
+plt.tight_layout()
+plt.show()
