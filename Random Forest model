@@ -112,7 +112,7 @@ shap.summary_plot(
     show=False
 )
 
-plt.gca().set_xlabel("SHAP value (40-50cm)")
+plt.gca().set_xlabel("SHAP value")
 plt.tight_layout()
 plt.show()
 
