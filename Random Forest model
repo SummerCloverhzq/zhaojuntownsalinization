@@ -47,7 +47,6 @@ for train_idx, test_idx in kf.split(X):
     X_tr_s = scaler.transform(X_tr)
     X_te_s = scaler.transform(X_te)
 
-    # LightGBM Model
     rf = RandomForestRegressor(n_estimators=100, min_samples_split=2, min_samples_leaf=1, random_state=60)
 
     pred_log = lgb.predict(X_te_s)
