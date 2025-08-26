@@ -1,82 +1,147 @@
 import pandas as pd
 import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
-from lightgbm import LGBMRegressor, plot_importance
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import seaborn as sns
 import shap
+from lightgbm import LGBMRegressor
 
-plt.rcParams['font.sans-serif'] = ['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
-
-file_path = 'file.csv'
+file_path = 'your file.csv'
 data = pd.read_csv(file_path, encoding='gbk')
+
 data.dropna(inplace=True)
 data.drop_duplicates(inplace=True)
 data['Classification of land use'] = data['Classification of land use'].astype(int)
 data['lon'] = data['Longitude']
 data['lat'] = data['Latitude']
-data['lon2'] = data['lon'] ** 2
-data['lat2'] = data['lat'] ** 2
-data['lon_lat'] = data['lon'] * data['lat']
-data['sin_lat'] = np.sin(np.radians(data['lat']))
-data['cos_lat'] = np.cos(np.radians(data['lat']))
 
-y = data['0_10']
-features = ['LST', 'DEM', 'PET', 'ET', 'Classification of land use',
-            'lon', 'lat', 'lon2', 'lat2', 'lon_lat', 'sin_lat', 'cos_lat',
-            'NDSI', 'EBSI', 'EVI2', 'BSI', 'NDVI']
-X = data[features]
+y_raw = data['40_50']
+min_val = y_raw.min()
+offset = abs(min_val) + 1 if min_val <= 0 else 0
+y_adj = y_raw + offset
+y_log = np.log10(y_adj)
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=65
-)
+feature_cols = [
+    'LST','DEM','PET','ET','Classification of land use',
+    'NDSI','EBSI','EVI2','BSI','NDVI','lon','lat']
+X_df = data[feature_cols]
+feature_names = X_df.columns.tolist()
+X = X_df.values
+
 kf = KFold(n_splits=10, shuffle=True, random_state=65)
-lgb = LGBMRegressor(
-    n_estimators=200,
-    max_depth=5,
-    learning_rate=0.1,
-    random_state=65
+mse_list, r2_list = [], []
+all_errors, y_all, pred_all = [], [], []
+lon_all, lat_all = [], []
+
+for train_idx, test_idx in kf.split(X):
+    X_tr, X_te = X[train_idx], X[test_idx]
+    lon_all.extend(data['lon'].iloc[test_idx].tolist())
+    lat_all.extend(data['lat'].iloc[test_idx].tolist())
+    y_tr_log = y_log.iloc[train_idx]
+    y_te_log = y_log.iloc[test_idx]
+
+    scaler = MinMaxScaler().fit(X_tr)
+    X_tr_s = scaler.transform(X_tr)
+    X_te_s = scaler.transform(X_te)
+
+    # LightGBM Model
+    lgb = LGBMRegressor(
+        n_estimators=200,
+        max_depth=5,
+        learning_rate=0.1,
+        random_state=65
+    )
+    lgb.fit(X_tr_s, y_tr_log)
+
+    pred_log = lgb.predict(X_te_s)
+
+    pred_adj = 10 ** pred_log
+    pred_orig = pred_adj - offset
+    y_te_orig = (10 ** y_te_log) - offset
+
+    mse_list.append(mean_squared_error(y_te_orig, pred_orig))
+    r2_list.append(r2_score(y_te_orig, pred_orig))
+    errors = y_te_orig - pred_orig
+    all_errors.extend(errors.tolist())
+    y_all.extend(y_te_orig.tolist())
+    pred_all.extend(pred_orig.tolist())
+
+print(f"10-Fold CV → MSE: {np.mean(mse_list):.4f}, R²: {np.mean(r2_list):.4f}")
+
+y_all = np.array(y_all)
+pred_all = np.array(pred_all)
+
+plt.figure(figsize=(10, 6))
+plt.plot(y_all, label='True')
+plt.plot(pred_all, label='Pred')
+plt.xlabel('Sample')
+plt.ylabel('value')
+plt.title('LightGBM Training and validation results (40-50cm)')
+plt.legend()
+plt.grid(False)
+plt.tight_layout()
+plt.show()
+
+mse = np.mean(mse_list)
+r2 = np.mean(r2_list)
+rmse = np.sqrt(mse)
+
+plt.figure(figsize=(8,6))
+sns.histplot(all_errors, kde=True)
+plt.title('Aggregated Prediction Error Distribution')
+plt.xlabel('Error (Actual - Predicted)'); plt.ylabel('Frequency')
+plt.grid(False); plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(8,6))
+plt.boxplot(mse_list, notch=True)
+plt.title('10-Fold CV MSE Distribution'); plt.ylabel('MSE')
+plt.grid(False); plt.tight_layout()
+plt.show()
+
+scaler_full = MinMaxScaler().fit(X)
+X_s_full = scaler_full.transform(X)
+
+rf_full = RandomForestRegressor(n_estimators=100, random_state=60)
+rf_full.fit(X_s_full, y_log)
+
+explainer = shap.TreeExplainer(rf_full)
+shap_values = explainer.shap_values(X_s_full)
+
+shap.summary_plot(
+    shap_values,
+    X_s_full,
+    feature_names=feature_names,
+    show=False
 )
-lgb.fit(X_train, y_train)
 
-y_pred = lgb.predict(X_test)
-train_pred = lgb.predict(X_train)
-
-print(f"Test MSE: {mean_squared_error(y_test, y_pred):.4f}")
-print(f"Test RMSE: {np.sqrt(mean_squared_error(y_test, y_pred)):.4f}")
-print(f"Test MAE: {mean_absolute_error(y_test, y_pred):.4f}")
-print(f"Test R²: {r2_score(y_test, y_pred):.4f}")
-print(f"Train R²: {r2_score(y_train, train_pred):.4f}")
-print(f"Train MSE: {mean_squared_error(y_train, train_pred):.4f}")
-print(f"Train RMSE: {np.sqrt(mean_squared_error(y_train, train_pred)):.4f}")
-print(f"Train MAE: {mean_absolute_error(y_train, train_pred):.4f}")
-
-plt.figure(figsize=(8, 6))
-plot_importance(lgb, max_num_features=15, height=0.5)
-plt.title("LightGBM Feature Importance")
+plt.gca().set_xlabel("SHAP value (40-50cm)")
+plt.tight_layout()
 plt.show()
 
-plt.figure(figsize=(6, 4))
-plt.plot(range(len(y_test)), y_test.values, 'o-', label='True Values')
-plt.plot(range(len(y_pred)), y_pred, 'o-', label='Predicted Values')
-plt.xlabel('Test Sample Index')
-plt.ylabel('ASD Index')
-plt.title('True vs Predicted Values')
-plt.legend()
-plt.show()
+plt.figure(figsize=(8,8))
+plt.scatter(y_all, y_all, color='navy', label='Actual Values', s=100, edgecolors='none')  # Deep blue for actual values, solid, no edge
+plt.scatter(y_all, pred_all, color='orange', label='Predicted Values', marker='D', s=150, edgecolors='none')  # Orange for predicted values, diamond shape, solid
+lims = [min(y_all.min(), pred_all.min()), max(y_all.max(), pred_all.max())]
+plt.plot(lims, lims, 'k--', lw=2)
 
-plt.figure(figsize=(6, 6))
-plt.scatter(y_test, y_pred, alpha=0.7, label='Test Data')
-plt.plot([y_test.min(), y_test.max()], 
-         [y_test.min(), y_test.max()], 
-         'r--', lw=2, label='Perfect Prediction Line')
-plt.xlabel('True Values')
-plt.ylabel('Predicted Values')
-plt.title('Scatter Plot: True vs Predicted')
-plt.legend()
+textstr = '\n'.join((
+    r'$R^2 = %.3f$'   % (r2,   ),
+    r'$MSE = %.3f$'   % (mse,  ),
+    r'$RMSE = %.3f$' % (rmse,)))
+plt.text(
+    0.05, 0.95, textstr,
+    transform=plt.gca().transAxes,
+    fontsize=22, verticalalignment='top',
+    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='none' ))
+plt.title('Actual vs Predicted (40-50cm)',fontsize=16)
+plt.xlabel('Actual Value (mS/cm)',fontsize=16)
+plt.ylabel('Predicted Value (mS/cm)',fontsize=16)
+plt.tick_params(axis='both', which='major', labelsize=16)
+plt.legend(fontsize=22)  # Add legend to show which color represents what
+plt.grid(False)
+plt.tight_layout()
 plt.show()
-
-explainer = shap.Explainer(lgb)
-shap_values = explainer(X_test)
-shap.summary_plot(shap_values, X_test, feature_names=features)
